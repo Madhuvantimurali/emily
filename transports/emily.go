@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"bytes"
 	"strconv"
 
 	"net/smtp"
@@ -33,7 +34,7 @@ import (
 type account struct {
 	host		string
 	smtpPort	uint
-	imapPort	uint
+	imapPort	uint64
 	uname		string
 	password	string
 	model_path	string // For now, just holds the model
@@ -50,7 +51,7 @@ type account struct {
 	send_mu		*sync.Mutex
 }
 
-func newAccount(host string, smtpPort uint, imapPort uint, uname string, password string, model_path string) (*account, error) {
+func newAccount(host string, smtpPort uint, imapPort uint64, uname string, password string, model_path string) (*account, error) {
 	res := &account {
 		host:		host,
 		smtpPort:	smtpPort,
@@ -82,7 +83,7 @@ type message struct {
 	rcvrs		[]string
 	msg		[]byte
 	uuid		[16]byte
-	sent_frags	uint
+	sent_frags	uint64
 }
 
 type slot struct {
@@ -148,8 +149,8 @@ func (usr *account) check_sent(id uuid.UUID, remove_if_sent bool) (bool, error) 
 	return sent, nil
 }
 
-func (usr *account) rcv() ([]byte, error) {
-	c, err := client.DialTLS(usr.host+":"+strconv.FormatUint(uint64(usr.imapPort), 10), nil) // XXX: Not configuring TLS Config
+func (usr *account) rcv() ([][]byte, error) {
+	c, err := client.DialTLS(usr.host+":"+strconv.FormatUint(usr.imapPort, 10), nil) // XXX: Not configuring TLS Config
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +165,7 @@ func (usr *account) rcv() ([]byte, error) {
 		return nil, err
 	}
 
-	res := make([]byte, 0)
+	res := make([][]byte, 0)
 
 	if mbox.Messages > usr.lastMessage {
 		seqset := new(imap.SeqSet)
@@ -225,7 +226,7 @@ func (usr *account) enqueue(rcvrs []string, b []byte) (id uuid.UUID, err error) 
 	msg.msg = b
 	msg.uuid, err = uuid.NewRandom()
 	if err != nil {
-		return nil, err
+		return uuid.Nil, err
 	}
 	msg.sent_frags = 0
 	usr.queue = append(usr.queue, msg)
@@ -266,7 +267,7 @@ func (usr *account) send() (x bool, err error) { // DOC: What does this bool rep
 	return false, nil
 }
 
-func (msg *message) makeChunk(size int) (res []byte, int, err error) {
+func (msg *message) makeChunk(size int) (res []byte, pld_size int, err error) { // DOC: Returns
 	// A chunk is
 	//	uuid (16 bytes)
 	//	frag info (1 byte: 1 bit is_last, 7 bit int)
@@ -279,20 +280,26 @@ func (msg *message) makeChunk(size int) (res []byte, int, err error) {
 
 	res = make([]byte, size)
 
-	res[0:16] = msg.uuid
+	n := copy(res[0:16], msg.uuid[:])
+	if n != 16 {
+		return nil, -1, fmt.Errorf("makeChunk: err copying uuid")
+	}
+
 	if msg.sent_frags > 127 {
-		return nil, nil, fmt.Errorf("makeChunk: index out of range")
+		return nil, -1, fmt.Errorf("makeChunk: index out of range")
 	}
 	to_pack := msg.sent_frags
 	if len(msg.msg) <= size - 16 - 1 - 4 {
+		// Pack all
 		binary.PutUvarint(res[16], to_pack + 128)
-		binary.PutUvarint(res[17:21], len(msg.msg))
-		res[21:21+len(msg.msg)] = msg.msg
-		return res, nil, nil
+		binary.PutUvarint(res[17:21], uint64(len(msg.msg)))
+		_ = copy(res[21:21+len(msg.msg)], msg.msg)
+		return res, -1, nil
 	} else {
+		// Pack some
 		binary.PutUvarint(res[16], to_pack)
 		pld_size := size - 16 - 1
-		res[17:] = msg.msg[:pld_size]
+		_ = copy(res[17:], msg.msg[:pld_size])
 		return res, pld_size, nil
 	}
 }
@@ -304,7 +311,12 @@ func (usr *account) randRcvrs() []string {
 func (usr *account) sendDummy(size int) (err error) {
 	rcvrs := usr.randRcvrs()
 	chunk := make([]byte, size) // NEXT: Get PGP overhead to reduce
-	err = usr.sendMail(rcvrs, usr.encrypt(chunk))
+	m, err := usr.encrypt(chunk)
+	if err != nil {
+		return err
+	}
+	err = usr.sendMail(rcvrs, m)
+	return  err
 }
 
 func (usr *account) decrypt(raw []byte) ([]byte, error) {
@@ -366,15 +378,19 @@ func (usr *account) encrypt(msg []byte) ([]byte, error) {
 func (usr *account) sendMsg(size int) (err error) {
 	msg := usr.queue[0]
 	chunk, pld_size, err := msg.makeChunk(size) // NEXT: Get PGP overhead to reduce
-	if err != nil { // TODO: There's an issue here
-		usr.queue = usr.queue[1:] // XXX: This ain't the best, should catch this before enqueueing
-		return
-	}
-	err = usr.sendMail(msg.rcvrs, usr.encrypt(chunk))
 	if err != nil {
-		return
+		usr.queue = usr.queue[1:] // XXX: This ain't the best, should catch this before enqueueing
+		return err
 	}
-	if pld_size != nil { // If we didn't send the remainder of the message
+	m, err := usr.encrypt(chunk)
+	if err != nil {
+		return err
+	}
+	err = usr.sendMail(msg.rcvrs, m)
+	if err != nil {
+		return err
+	}
+	if pld_size >= 0 { // If we didn't send the remainder of the message
 		msg.msg = msg.msg[pld_size:]
 		msg.sent_frags += 1
 	} else {
@@ -383,11 +399,12 @@ func (usr *account) sendMsg(size int) (err error) {
 		defer usr.sent_mu.Unlock()
 		usr.is_sent[msg.uuid] = true
 	}
+	return nil
 }
 
 func (usr *account) sendMail(rcvrs []string, pld []byte) error {
 	auth := smtp.PlainAuth("". usr.uname, usr.password, usr.host)
 		// Note that this fails w/o TLS.
 
-	return smtp.SendMail(usr.host+":"+usr.smtpPort, auth, usr.uname, rcvrs, pld)
+	return smtp.SendMail(usr.host+":"+strconv.FormatUint(usr.smtpPort, 10), auth, usr.uname, rcvrs, pld)
 }
