@@ -6,10 +6,14 @@
 package main
 
 import (
+	"io"
+	"io/ioutil"
+
 	"time"
 	"fmt"
 	"os"
 	"sync"
+	"strconv"
 
 	"net/smtp"
 
@@ -17,10 +21,13 @@ import (
 	"golang.org/x/crypto/openpgp/armor"
 
 	"encoding/csv"
+	"encoding/binary"
 
 	"github.com/google/uuid"
 
+	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
+	"github.com/emersion/go-message/mail"
 )
 
 type account struct {
@@ -33,18 +40,18 @@ type account struct {
 
 	queue		[]*message
 
-	lastMessage	uint // XXX: We assume the user never deletes a single email
+	lastMessage	uint32 // XXX: We assume the user never deletes a single email
 
 	slots		[]slot
 
 	is_sent		map[uuid.UUID]bool
-	sent_mu		sync.Mutex
+	sent_mu		*sync.Mutex
 
-	send_mu		sync.Mutex
+	send_mu		*sync.Mutex
 }
 
-func newAccount(host string, smtpPort uint, imapPort uint, uname string, password string, model_path string) *account, err {
-	res := account {
+func newAccount(host string, smtpPort uint, imapPort uint, uname string, password string, model_path string) (*account, error) {
+	res := &account {
 		host:		host,
 		smtpPort:	smtpPort,
 		imapPort:	imapPort,
@@ -52,13 +59,13 @@ func newAccount(host string, smtpPort uint, imapPort uint, uname string, passwor
 		password:	password,
 		model_path:	model_path,
 
-		queue:		make(*message, 0),
+		queue:		make([]*message, 0),
 
 		lastMessage:	0, // XXX: This should probably be done better
 
-		slots:		make(slot, 0),
+		slots:		make([]slot, 0),
 
-		is_sent:	make(map[uuid.UUID]bool)
+		is_sent:	make(map[uuid.UUID]bool),
 		sent_mu:	&sync.Mutex{},
 
 		send_mu:	&sync.Mutex{},
@@ -99,14 +106,27 @@ func (usr *account) load_slots(num int) error {
 			return fmt.Errorf("load_slots: ran out of slots")
 		}
 
+		s_time, err := strconv.ParseInt(e[0], 10, 64)
+		if err != nil {
+			return err
+		}
+		size, err := strconv.Atoi(e[1])
+		if err != nil {
+			return err
+		}
+		rcvr_ct, err := strconv.Atoi(e[2])
+		if err != nil {
+			return  err
+		}
+
 		s := slot{
-			time:		e[0],
-			size:		e[1],
-			rcvr_ct:	e[2],
+			time:		time.Unix(s_time, 0),
+			size:		size,
+			rcvr_ct:	rcvr_ct,
 		}
 
 		if s.time.After(time.Now()) {
-			if len(usr.slots) == 0 || s.time.After(usr.slots[-1].time) {
+			if len(usr.slots) == 0 || s.time.After(usr.slots[len(usr.slots)-1].time) {
 				usr.slots = append(usr.slots, s)
 				added += 1
 			}
@@ -115,10 +135,10 @@ func (usr *account) load_slots(num int) error {
 	return nil
 }
 
-func (usr *account) check_sent(id uuid.UUID, remove_if_sent bool) bool, error {
-	sent, ok = usr.is_sent[id]
+func (usr *account) check_sent(id uuid.UUID, remove_if_sent bool) (bool, error) {
+	sent, ok := usr.is_sent[id]
 	if !ok {
-		return nil, fmt.Errorf("Message not sent, or to be sent")
+		return false, fmt.Errorf("Message not sent, or to be sent")
 	}
 	if sent && remove_if_sent {
 		usr.sent_mu.Lock()
@@ -128,13 +148,13 @@ func (usr *account) check_sent(id uuid.UUID, remove_if_sent bool) bool, error {
 	return sent, nil
 }
 
-func (usr *account) rcv() []byte, error {
-	c, err := client.DialTLS(usr.host+":"+usr.imapPort, nil) // XXX: Not configuring TLS Config
+func (usr *account) rcv() ([]byte, error) {
+	c, err := client.DialTLS(usr.host+":"+strconv.FormatUint(uint64(usr.imapPort), 10), nil) // XXX: Not configuring TLS Config
 	if err != nil {
 		return nil, err
 	}
 
-	if err = c.login(usr.uname, usr.password); err != nil {
+	if err = c.Login(usr.uname, usr.password); err != nil {
 		return nil, err
 	}
 
@@ -150,11 +170,11 @@ func (usr *account) rcv() []byte, error {
 		seqset := new(imap.SeqSet)
 		seqset.AddRange(usr.lastMessage + 1, mbox.Messages)
 
-		var section imap.BodySectionName
+		var section *imap.BodySectionName
 		items := []imap.FetchItem{section.FetchItem()}
 
 		messages := make(chan *imap.Message, 10)
-		done = make(chan error, 1)
+		done := make(chan error, 1)
 		go func() {
 			done <- c.Fetch(seqset, items,  messages)
 		}()
@@ -211,16 +231,16 @@ func (usr *account) enqueue(rcvrs []string, b []byte) (id uuid.UUID, err error) 
 	usr.queue = append(usr.queue, msg)
 	usr.sent_mu.Lock()
 	defer usr.sent_mu.Unlock()
-	user.is_sent[msg.uuid] = false
+	usr.is_sent[msg.uuid] = false
 	return msg.uuid, nil
 }
 
-func (usr *account) send() bool, error {
+func (usr *account) send() (x bool, err error) { // DOC: What does this bool represent
 	usr.send_mu.Lock()
-	defer user.send_mu.Unlock()
+	defer usr.send_mu.Unlock()
 
 	if len(usr.slots) == 0 {
-		return fmt.Errorf("Out of send slots, add an updated model")
+		return false, fmt.Errorf("Out of send slots, add an updated model")
 	}
 	slot := usr.slots[0]
 	if slot.time.Before(time.Now()) {
@@ -281,15 +301,15 @@ func (usr *account) randRcvrs() []string {
 	return nil // TODO
 }
 
-func (usr *account sendDummy(size int) (err error) {
+func (usr *account) sendDummy(size int) (err error) {
 	rcvrs := usr.randRcvrs()
 	chunk := make([]byte, size) // NEXT: Get PGP overhead to reduce
 	err = usr.sendMail(rcvrs, usr.encrypt(chunk))
 }
 
-func (usr *account) decrypt(raw []byte) []byte, error {
+func (usr *account) decrypt(raw []byte) ([]byte, error) {
 
-	buff :== bytes.NewBuffer(raw)
+	buff := bytes.NewBuffer(raw)
 
 	block, err := armor.Decode(buff)
 	if err != nil {
@@ -320,7 +340,7 @@ func (usr *account) decrypt(raw []byte) []byte, error {
 	return res, nil
 }
 
-func (usr *account) encrypt(msg []byte) []byte, error {
+func (usr *account) encrypt(msg []byte) ([]byte, error) {
 
 	buf := new(bytes.Buffer)
 	armor_w, err := armor.Encode(buf, "PGP MESSAGE", nil) // XXX: May want to do headers
