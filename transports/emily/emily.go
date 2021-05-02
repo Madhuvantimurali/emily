@@ -31,48 +31,39 @@ import (
 	"github.com/emersion/go-message/mail"
 )
 
-type account struct {
-	host		string
-	smtpPort	uint64
-	imapPort	uint64
-	uname		string
-	password	string
-	model_path	string // For now, just holds the model
+type Conn struct {
+	// net.Conn NEXT
+	account		*account
+
+	model_path	string
 
 	queue		[]*message
 
-	lastMessage	uint32 // XXX: We assume the user never deletes a single email
-
+	lastMessage	uint32
 	slots		[]slot
 
 	is_sent		map[uuid.UUID]bool
 	sent_mu		*sync.Mutex
-
-	send_mu		*sync.Mutex
 }
 
-func newAccount(host string, smtpPort uint64, imapPort uint64, uname string, password string, model_path string) (*account, error) {
-	res := &account {
-		host:		host,
-		smtpPort:	smtpPort,
-		imapPort:	imapPort,
-		uname:		uname,
-		password:	password,
+func NewConn(account *account, model_path string) (*Conn, error) {
+	// URGENT: If there is an account, get it
+	res := {
+		account:	account,
+
 		model_path:	model_path,
 
 		queue:		make([]*message, 0),
 
-		lastMessage:	0, // XXX: This should probably be done better
+		lastMessage:	0, // XXX: This should be done better
 
 		slots:		make([]slot, 0),
 
 		is_sent:	make(map[uuid.UUID]bool),
 		sent_mu:	&sync.Mutex{},
-
-		send_mu:	&sync.Mutex{},
 	}
 
-	err := res.load_slots(30) // XXX: Arbitrary init amount
+	err := conn.load_slots(30) // XXX: Arbitrary init amount
 	if err != nil {
 		return nil, err
 	}
@@ -92,8 +83,8 @@ type slot struct {
 	rcvr_ct	int
 }
 
-func (usr *account) load_slots(num int) error {
-	f, err := os.Open(usr.model_path) // XXX: Assumes model is sorted chronologically
+func (c *Conn) load_slots(num int) error {
+	f, err := os.Open(c.model_path) // XXX: Assumes model is sorted chronologically
 	if err != nil {
 		return err
 	}
@@ -127,8 +118,8 @@ func (usr *account) load_slots(num int) error {
 		}
 
 		if s.time.After(time.Now()) {
-			if len(usr.slots) == 0 || s.time.After(usr.slots[len(usr.slots)-1].time) {
-				usr.slots = append(usr.slots, s)
+			if len(c.slots) == 0 || s.time.After(c.slots[len(c.slots)-1].time) {
+				c.slots = append(c.slots, s)
 				added += 1
 			}
 		}
@@ -220,20 +211,33 @@ func (usr *account) rcv() ([][]byte, error) {
 	return res, nil
 }
 
-func (usr *account) enqueue(rcvrs []string, b []byte) (id uuid.UUID, err error) {
+func (c *Conn) Write(rcvrs []string, b []byte) (err error) {
+	// NEXT: Bring in line with net.Conn.Write
 	msg := new(message)
 	msg.rcvrs = rcvrs
 	msg.msg = b
 	msg.uuid, err = uuid.NewRandom()
 	if err != nil {
-		return uuid.Nil, err
+		return err
 	}
 	msg.sent_frags = 0
-	usr.queue = append(usr.queue, msg)
-	usr.sent_mu.Lock()
-	defer usr.sent_mu.Unlock()
-	usr.is_sent[msg.uuid] = false
-	return msg.uuid, nil
+	c.queue = append(usr.queue, msg)
+
+	func() {
+		c.sent_mu.Lock()
+		defer c.sent_mu.Unlock()
+		c.is_sent[msg.uuid] = false
+	}()
+
+	for true { // XXX: Need to ensure something is writing
+		sent, err := connection.check_sent(msg.uuid, true)
+		if err != nil {
+			return err
+		}
+		if sent {
+			return nil
+		}
+	}
 }
 
 func (usr *account) send() (x bool, err error) { // DOC: What does this bool represent
@@ -315,7 +319,7 @@ func (usr *account) sendDummy(size int) (err error) {
 	if err != nil {
 		return err
 	}
-	err = usr.sendMail(rcvrs, m)
+	err = usr.account.sendMail(rcvrs, m)
 	return  err
 }
 
@@ -386,7 +390,7 @@ func (usr *account) sendMsg(size int) (err error) {
 	if err != nil {
 		return err
 	}
-	err = usr.sendMail(msg.rcvrs, m)
+	err = usr.account.sendMail(msg.rcvrs, m)
 	if err != nil {
 		return err
 	}
@@ -400,11 +404,4 @@ func (usr *account) sendMsg(size int) (err error) {
 		usr.is_sent[msg.uuid] = true
 	}
 	return nil
-}
-
-func (usr *account) sendMail(rcvrs []string, pld []byte) error {
-	auth := smtp.PlainAuth("", usr.uname, usr.password, usr.host)
-		// Note that this fails w/o TLS.
-
-	return smtp.SendMail(usr.host+":"+strconv.FormatUint(usr.smtpPort, 10), auth, usr.uname, rcvrs, pld)
 }
