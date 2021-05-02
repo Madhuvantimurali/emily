@@ -140,75 +140,19 @@ func (usr *account) check_sent(id uuid.UUID, remove_if_sent bool) (bool, error) 
 	return sent, nil
 }
 
-func (usr *account) rcv() ([][]byte, error) {
-	c, err := client.DialTLS(usr.host+":"+strconv.FormatUint(usr.imapPort, 10), nil) // XXX: Not configuring TLS Config
-	if err != nil {
-		return nil, err
-	}
-
-	if err = c.Login(usr.uname, usr.password); err != nil {
-		return nil, err
-	}
-
-	// TEST: Goes for inbox
-	mbox, err := c.Select("INBOX", false)
-	if err != nil {
-		return nil, err
-	}
-
+func (c *Conn) Read() ([][]byte, error) {
 	res := make([][]byte, 0)
 
-	if mbox.Messages > usr.lastMessage {
-		seqset := new(imap.SeqSet)
-		seqset.AddRange(usr.lastMessage + 1, mbox.Messages)
-
-		var section *imap.BodySectionName
-		items := []imap.FetchItem{section.FetchItem()}
-
-		messages := make(chan *imap.Message, 10)
-		done := make(chan error, 1)
-		go func() {
-			done <- c.Fetch(seqset, items,  messages)
-		}()
-
-		for recv := range messages {
-			parsed := recv.GetBody(section)
-			if parsed == nil {
-				return nil, fmt.Errorf("Server didn't returned message body")
-			}
-
-			mr, err := mail.CreateReader(parsed)
-			if err != nil {
-				return nil, err
-			}
-			// See https://github.com/emersion/go-imap/wiki/Fetching-messages#fetching-the-whole-message-body
-			for {
-				p, err := mr.NextPart()
-				if err == io.EOF {
-					break
-				} else if err != nil {
-					return nil, err
-				}
-
-				switch p.Header.(type) {
-				case *mail.InlineHeader:
-					b, _ := ioutil.ReadAll(p.Body)
-					d, err := usr.decrypt(b)
-					if d != nil {
-						res = append(res, d)
-					} else if err != nil && err != io.EOF {
-						return nil, err
-					}
-				}
-			}
-		}
-
-		if err := <-done; err != nil {
+	bs := c.account.recieveMail(// TODO
+	for b := range bs {
+		d, err := usr.decrypt(b)
+		if d != nil {
+			res = append(res, d)
+		} else if err != nil && err != io.EOF {
 			return nil, err
 		}
 	}
-
-	return res, nil
+	return res
 }
 
 func (c *Conn) Write(rcvrs []string, b []byte) (err error) {
