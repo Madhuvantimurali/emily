@@ -3,7 +3,7 @@
 //
 //	Eliana Troper
 
-package main
+package emily
 
 import (
 	"io"
@@ -33,7 +33,7 @@ import (
 
 type account struct {
 	host		string
-	smtpPort	uint
+	smtpPort	uint64
 	imapPort	uint64
 	uname		string
 	password	string
@@ -51,7 +51,7 @@ type account struct {
 	send_mu		*sync.Mutex
 }
 
-func newAccount(host string, smtpPort uint, imapPort uint64, uname string, password string, model_path string) (*account, error) {
+func newAccount(host string, smtpPort uint64, imapPort uint64, uname string, password string, model_path string) (*account, error) {
 	res := &account {
 		host:		host,
 		smtpPort:	smtpPort,
@@ -199,7 +199,7 @@ func (usr *account) rcv() ([][]byte, error) {
 					return nil, err
 				}
 
-				switch h := p.Header.(type) {
+				switch p.Header.(type) {
 				case *mail.InlineHeader:
 					b, _ := ioutil.ReadAll(p.Body)
 					d, err := usr.decrypt(b)
@@ -291,13 +291,13 @@ func (msg *message) makeChunk(size int) (res []byte, pld_size int, err error) { 
 	to_pack := msg.sent_frags
 	if len(msg.msg) <= size - 16 - 1 - 4 {
 		// Pack all
-		binary.PutUvarint(res[16], to_pack + 128)
+		binary.PutUvarint(res[16:17], to_pack + 128)
 		binary.PutUvarint(res[17:21], uint64(len(msg.msg)))
 		_ = copy(res[21:21+len(msg.msg)], msg.msg)
 		return res, -1, nil
 	} else {
 		// Pack some
-		binary.PutUvarint(res[16], to_pack)
+		binary.PutUvarint(res[16:17], to_pack)
 		pld_size := size - 16 - 1
 		_ = copy(res[17:], msg.msg[:pld_size])
 		return res, pld_size, nil
@@ -403,7 +403,7 @@ func (usr *account) sendMsg(size int) (err error) {
 }
 
 func (usr *account) sendMail(rcvrs []string, pld []byte) error {
-	auth := smtp.PlainAuth("". usr.uname, usr.password, usr.host)
+	auth := smtp.PlainAuth("", usr.uname, usr.password, usr.host)
 		// Note that this fails w/o TLS.
 
 	return smtp.SendMail(usr.host+":"+strconv.FormatUint(usr.smtpPort, 10), auth, usr.uname, rcvrs, pld)
