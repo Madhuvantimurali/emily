@@ -326,7 +326,7 @@ func (usr *account) randRcvrs() []string {
 func (usr *account) sendDummy(size int) (err error) {
 	rcvrs := usr.randRcvrs()
 	chunk := make([]byte, size) // NEXT: Get PGP overhead to reduce
-	m, err := usr.encrypt(chunk) // URGENT: Do this with a bad password
+	m, err := encrypt(chunk) // URGENT: Do this with a bad password
 	if err != nil {
 		return err
 	}
@@ -334,7 +334,7 @@ func (usr *account) sendDummy(size int) (err error) {
 	return  err
 }
 
-func (usr *account) decrypt(raw []byte) ([]byte, error) {
+func decrypt(raw []byte) ([]byte, error) {
 
 	buff := bytes.NewBuffer(raw)
 
@@ -357,12 +357,12 @@ func (usr *account) decrypt(raw []byte) ([]byte, error) {
 
 	md, err := openpgp.ReadMessage(block.Body, nil, prompt, nil)
 	if err != nil {
-		return nil, fmt.Errorf("Failed decrypting: ", err) // TODO: Turn into EOF
+		return nil, fmt.Errorf("Failed decrypting: %s", err) // TODO: Turn into EOF
 	}
 
 	res, err := ioutil.ReadAll(md.UnverifiedBody)
 	if err != nil {
-		return nil, fmt.Errorf("Failed parsing: ", err)
+		return nil, fmt.Errorf("Failed parsing: %s", err)
 	}
 
 	return res, nil
@@ -454,14 +454,13 @@ func (usr *account) deChunk(raw []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func (usr *account) encrypt(msg []byte) ([]byte, error) {
+func encrypt(msg []byte) ([]byte, error) {
 
-	buf := new(bytes.Buffer)
+	buf := bytes.NewBuffer(nil)
 	armor_w, err := armor.Encode(buf, "PGP MESSAGE", nil) // XXX: May want to do headers
 	if err != nil {
 		return nil, err
 	}
-	defer armor_w.Close()
 
 	w, err := openpgp.SymmetricallyEncrypt(armor_w, []byte("raven_is_cool"), nil, nil)
 	if err != nil {
@@ -473,6 +472,9 @@ func (usr *account) encrypt(msg []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	w.Close()
+	armor_w.Close()
 
 	return buf.Bytes(), nil
 }
