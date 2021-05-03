@@ -206,8 +206,7 @@ func (usr *account) rcv() ([][]byte, error) {
 				switch p.Header.(type) {
 				case *mail.InlineHeader:
 					b, _ := ioutil.ReadAll(p.Body)
-					// d, err := usr.decrypt(b) // 2do
-					d := b
+					d, err := decrypt(b)
 					if d != nil {
 						r, err := usr.deChunk(d)
 						if err != nil {
@@ -235,15 +234,25 @@ func (usr *account) rcv() ([][]byte, error) {
 	return res, nil
 }
 
-func (usr *account) enqueue(rcvrs []string, b []byte) (id uuid.UUID, err error) {
-	msg := new(message)
-	msg.rcvrs = rcvrs
-	msg.msg = b
+func newMessage(b []byte) (msg *message, err error) {
+	// Test X
+	msg = new(message)
 	msg.uuid, err = uuid.NewRandom()
+	if err != nil {
+		return nil, err
+	}
+	msg.msg = b
+	msg.sent_frags = 0
+
+	return msg, nil
+}
+
+func (usr *account) enqueue(rcvrs []string, b []byte) (id uuid.UUID, err error) {
+	msg, err := newMessage(b)
 	if err != nil {
 		return uuid.Nil, err
 	}
-	msg.sent_frags = 0
+	msg.rcvrs = rcvrs
 	usr.queue = append(usr.queue, msg)
 	usr.sent_mu.Lock()
 	defer usr.sent_mu.Unlock()
@@ -251,7 +260,7 @@ func (usr *account) enqueue(rcvrs []string, b []byte) (id uuid.UUID, err error) 
 	return msg.uuid, nil
 }
 
-func (usr *account) send() (err error) { // DOC: What does this bool represent
+func (usr *account) send() (err error) {
 	usr.send_mu.Lock()
 	defer usr.send_mu.Unlock()
 
@@ -283,6 +292,8 @@ func (usr *account) send() (err error) { // DOC: What does this bool represent
 }
 
 func (msg *message) makeChunk(size int) (res []byte, pld_size int, err error) { // DOC: Returns
+	// Test X
+
 	// A chunk is
 	//	uuid (16 bytes)
 	//	frag info (1 byte: 1 bit is_last, 7 bit int)
@@ -320,13 +331,13 @@ func (msg *message) makeChunk(size int) (res []byte, pld_size int, err error) { 
 }
 
 func (usr *account) randRcvrs() []string {
-	return nil // TODO
+	return nil // URGENT
 }
 
 func (usr *account) sendDummy(size int) (err error) {
 	rcvrs := usr.randRcvrs()
 	chunk := make([]byte, size) // NEXT: Get PGP overhead to reduce
-	m, err := encrypt(chunk) // URGENT: Do this with a bad password
+	m, err := encrypt(chunk, []byte("dummy"))
 	if err != nil {
 		return err
 	}
@@ -335,6 +346,7 @@ func (usr *account) sendDummy(size int) (err error) {
 }
 
 func decrypt(raw []byte) ([]byte, error) {
+	// Test X
 
 	buff := bytes.NewBuffer(raw)
 
@@ -412,7 +424,6 @@ func (grp *msg_grp) reconstruct() ([]byte) {
 	return res
 }
 
-// URGENT: Map from id to msg_grp
 func (usr *account) deChunk(raw []byte) ([]byte, error) {
 	res := new(msg_frg)
 	id, err := uuid.FromBytes(raw[0:16])
@@ -454,7 +465,8 @@ func (usr *account) deChunk(raw []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func encrypt(msg []byte) ([]byte, error) {
+func encrypt(msg []byte, pass []byte) ([]byte, error) {
+	// Test X
 
 	buf := bytes.NewBuffer(nil)
 	armor_w, err := armor.Encode(buf, "PGP MESSAGE", nil) // XXX: May want to do headers
@@ -462,7 +474,7 @@ func encrypt(msg []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	w, err := openpgp.SymmetricallyEncrypt(armor_w, []byte("raven_is_cool"), nil, nil)
+	w, err := openpgp.SymmetricallyEncrypt(armor_w, pass, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -486,11 +498,10 @@ func (usr *account) sendMsg(size int) (err error) {
 		usr.queue = usr.queue[1:] // XXX: This ain't the best, should catch this before enqueueing
 		return err
 	}
-	m := chunk
-	// m, err := usr.encrypt(chunk) // 2DO
-	// if err != nil {
-	//	return err
-	//}
+	m, err := encrypt(chunk, []byte("raven_is_cool")) // NEXT
+	if err != nil {
+		return err
+	}
 	err = usr.sendMail(msg.rcvrs, m)
 	if err != nil {
 		return err
