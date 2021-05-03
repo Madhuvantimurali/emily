@@ -49,6 +49,8 @@ type account struct {
 	sent_mu		*sync.Mutex
 
 	send_mu		*sync.Mutex
+
+	re_grp		map[uuid.UUID]*msg_grp
 }
 
 func newAccount(host string, smtpPort uint64, imapPort uint64, uname string, password string, model_path string) (*account, error) {
@@ -70,6 +72,8 @@ func newAccount(host string, smtpPort uint64, imapPort uint64, uname string, pas
 		sent_mu:	&sync.Mutex{},
 
 		send_mu:	&sync.Mutex{},
+
+		re_grp:		make(map[uuid.UUID]*msg_grp),
 	}
 
 	err := res.load_slots(30) // XXX: Arbitrary init amount
@@ -202,11 +206,22 @@ func (usr *account) rcv() ([][]byte, error) {
 				switch p.Header.(type) {
 				case *mail.InlineHeader:
 					b, _ := ioutil.ReadAll(p.Body)
-					d, err := usr.decrypt(b)
+					// d, err := usr.decrypt(b) // 2do
+					d := b
 					if d != nil {
-						res = append(res, d)
-					} else if err != nil && err != io.EOF {
-						return nil, err
+						r, err := usr.deChunk(d)
+						if err != nil {
+							return nil, err
+						}
+						if r != nil {
+							res = append(res, d)
+						}
+					} else if err != nil {
+						if err == io.EOF {
+							continue
+						} else {
+							return nil, err
+						}
 					}
 				}
 			}
@@ -236,12 +251,12 @@ func (usr *account) enqueue(rcvrs []string, b []byte) (id uuid.UUID, err error) 
 	return msg.uuid, nil
 }
 
-func (usr *account) send() (x bool, err error) { // DOC: What does this bool represent
+func (usr *account) send() (err error) { // DOC: What does this bool represent
 	usr.send_mu.Lock()
 	defer usr.send_mu.Unlock()
 
 	if len(usr.slots) == 0 {
-		return false, fmt.Errorf("Out of send slots, add an updated model")
+		return fmt.Errorf("Out of send slots, add an updated model")
 	}
 	slot := usr.slots[0]
 	if slot.time.Before(time.Now()) {
@@ -251,7 +266,7 @@ func (usr *account) send() (x bool, err error) { // DOC: What does this bool rep
 			err = usr.sendDummy(slot.size)
 		}
 		if err != nil {
-			return false, err
+			return err
 		}
 
 
@@ -259,12 +274,12 @@ func (usr *account) send() (x bool, err error) { // DOC: What does this bool rep
 		if len(usr.slots) < 10 {
 			err = usr.load_slots(10)
 			if err != nil {
-				return true, err
+				return err
 			}
 		}
-		return true, nil
+		return nil
 	}
-	return false, nil
+	return nil
 }
 
 func (msg *message) makeChunk(size int) (res []byte, pld_size int, err error) { // DOC: Returns
@@ -311,7 +326,7 @@ func (usr *account) randRcvrs() []string {
 func (usr *account) sendDummy(size int) (err error) {
 	rcvrs := usr.randRcvrs()
 	chunk := make([]byte, size) // NEXT: Get PGP overhead to reduce
-	m, err := usr.encrypt(chunk)
+	m, err := usr.encrypt(chunk) // URGENT: Do this with a bad password
 	if err != nil {
 		return err
 	}
@@ -349,7 +364,94 @@ func (usr *account) decrypt(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Failed parsing: ", err)
 	}
+
 	return res, nil
+}
+
+func f_flag(i []byte) (uint, bool, error) {
+	if len(i) != 1 {
+		return 0, false, fmt.Errorf("Flag is malformed: bad length")
+	}
+	r, n := binary.Uvarint(i)
+	if n <= 0 {
+		return 0, false, fmt.Errorf("Flag is malformed: bad val")
+	}
+	is_last := false
+	if r >= 128 {
+		is_last = true
+		r -= 128
+	}
+	return uint(r), is_last, nil
+}
+
+type msg_frg struct {
+	frag	uint
+	pld	[]byte
+}
+
+type msg_grp struct {
+	frgs	[]*msg_frg
+	last	int
+}
+
+func (grp *msg_grp) reconstruct() ([]byte) {
+	if len(grp.frgs) < grp.last + 1 {
+		return nil
+	}
+	buf := make([][]byte, grp.last)
+	for _, frg := range grp.frgs {
+		buf[frg.frag] = frg.pld
+	}
+	res := make([]byte, 0)
+	for _, chk := range buf {
+		if len(chk) == 0 {
+			return nil
+		}
+		res = append(res, chk...)
+	}
+	return res
+}
+
+// URGENT: Map from id to msg_grp
+func (usr *account) deChunk(raw []byte) ([]byte, error) {
+	res := new(msg_frg)
+	id, err := uuid.FromBytes(raw[0:16])
+	if err != nil {
+		return nil, err
+	}
+	frag_flag := raw[16:17]
+	is_last := false
+	res.frag, is_last, err = f_flag(frag_flag)
+	if err != nil {
+		return nil, err
+	}
+	if !is_last {
+		res.pld = raw[17:]
+	} else {
+		length, n := binary.Uvarint(raw[17:21])
+		if n <= 0 {
+			return nil, fmt.Errorf("Error decoding length")
+		}
+		res.pld = raw[21:21+length]
+	}
+	grp, ok := usr.re_grp[id]
+	if !ok {
+		grp = new(msg_grp)
+		grp.last = -1
+		usr.re_grp[id] = grp
+	}
+	grp.frgs = append(grp.frgs, res)
+	if is_last {
+		grp.last = int(res.frag)
+	}
+	if grp.last > -1 {
+		b := grp.reconstruct()
+		if b != nil {
+			delete(usr.re_grp, id) // XXX: If some dupes arrive later...
+		}
+		return b, nil
+	}
+	return nil, nil
 }
 
 func (usr *account) encrypt(msg []byte) ([]byte, error) {
@@ -382,10 +484,11 @@ func (usr *account) sendMsg(size int) (err error) {
 		usr.queue = usr.queue[1:] // XXX: This ain't the best, should catch this before enqueueing
 		return err
 	}
-	m, err := usr.encrypt(chunk)
-	if err != nil {
-		return err
-	}
+	m := chunk
+	// m, err := usr.encrypt(chunk) // 2DO
+	// if err != nil {
+	//	return err
+	//}
 	err = usr.sendMail(msg.rcvrs, m)
 	if err != nil {
 		return err
