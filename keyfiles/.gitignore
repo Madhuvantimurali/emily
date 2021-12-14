@@ -1,0 +1,7 @@
+# Ignores all
+*
+
+# Except an example
+!example.json
+# ... and this
+!.gitignore
