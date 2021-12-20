@@ -1,4 +1,4 @@
-module github.com/racecar/emily
+module github.com/racecar-gu/emily
 
 go 1.17
 
