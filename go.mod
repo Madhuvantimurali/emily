@@ -1,4 +1,4 @@
-module github.com/racecar/raven-go
+module github.com/racecar/emily
 
 go 1.17
 
