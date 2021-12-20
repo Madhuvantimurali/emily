@@ -71,6 +71,9 @@ type Account struct {
 	imapClient *client.Client
 	smtpClient *smtp.Client
 }
+func (act *Account) Name() string {
+	return act.uname
+}
 
 func NewAccount(smtpHost string, smtpPort uint64, imapHost string, imapPort uint64, uname string, password string, keyfile string, insecure_tls bool) (*Account, error) {
 	res := &Account{
