@@ -145,7 +145,7 @@ func main() {
 	emily.LogInfo(prep_account.Uname)
 	emily.LogInfo(prep_account.KeyFilePath)
 
-	account, err := emily.NewAccount(prep_account.SmtpHost, prep_account.SmtpPort, prep_account.ImapHost, prep_account.ImapPort, prep_account.Uname, prep_account.Password, prep_account.KeyFilePath)
+	account, err := emily.NewAccount(prep_account.SmtpHost, prep_account.SmtpPort, prep_account.ImapHost, prep_account.ImapPort, prep_account.Uname, prep_account.Password, prep_account.KeyFilePath, false)
 	if err != nil {
 		emily.LogError(err)
 		os.Exit(1)
