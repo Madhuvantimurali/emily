@@ -8,14 +8,14 @@ import (
 	"time"
 	"io/ioutil"
 	"os"
-	"github.com/racecar/raven-go/emily"
+	"github.com/racecar/emily/lib"
 )
 
 var REQUEST = "REQUEST"
 var CURL = "/usr/bin/curl"
 var URL = "http://128.31.0.34:9131/tor/status-vote/current/consensus"
-// var CLIENT = "ADDRESS@HOST.NET"
-// var SERVER = "ADDRESS@HOST.NET"
+var CLIENT = "ADDRESS@HOST.NET"
+var SERVER = "ADDRESS@HOST.NET"
 
 type email_account struct {
 	SmtpHost	string `json:"smtpHost"`
