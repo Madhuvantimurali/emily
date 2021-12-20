@@ -72,7 +72,7 @@ type Account struct {
 	smtpClient *smtp.Client
 }
 
-func NewAccount(smtpHost string, smtpPort uint64, imapHost string, imapPort uint64, uname string, password string, keyfile string) (*Account, error) {
+func NewAccount(smtpHost string, smtpPort uint64, imapHost string, imapPort uint64, uname string, password string, keyfile string, insecure_tls bool) (*Account, error) {
 	res := &Account{
 		smtpHost: smtpHost,
 		smtpPort: smtpPort,
@@ -89,7 +89,7 @@ func NewAccount(smtpHost string, smtpPort uint64, imapHost string, imapPort uint
 
 		re_grp: make(map[uuid.UUID]*msg_grp),
 
-		insecure_tls: false,
+		insecure_tls: insecure_tls,
 
 		keyring: loadKeyRing(keyfile),
 	}
