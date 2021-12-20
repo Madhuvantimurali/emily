@@ -8,7 +8,7 @@ import (
 	"time"
 	"io/ioutil"
 	"os"
-	"github.com/racecar/emily/lib"
+	"github.com/racecar-gu/emily/lib"
 )
 
 var REQUEST = "REQUEST"
