@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"io/ioutil"
 
 	"golang.org/x/crypto/openpgp"
 	"golang.org/x/crypto/openpgp/armor"
@@ -115,42 +116,54 @@ func makeKeyRing(filename string, num int) {
 func loadKeyRing(filename string) raven_keyring {
 	var f *os.File
 	var err error
+	LogInfo("Loading Key Ring")
 	if f, err = os.Open(filename); err != nil {
 		log.Panicf("cannot open '%v': err=%v\n", filename, err)
 	}
 	defer f.Close()
-	fi, err := f.Stat()
+	//fi, err := f.Stat()
+	//LogDebug(fi)
 	if err != nil {
 		log.Panicf("cannot state file %v; err=%v\n", filename, err)
 	}
-	length := fi.Size()
-	buf := make([]byte, length)
+	//length := fi.Size()
+	/*buf := make([]byte, length)
 	if _, err = f.Read(buf); err != nil {
 		log.Panicf("cannot read file: %v\n", err)
-	}
+	}*/
+
+	byteValue, _ := ioutil.ReadAll(f)
+	//LogDebug(byteValue)
 	var keyring raven_keyring
-	if err := json.Unmarshal(buf, &keyring); err != nil {
+	if err := json.Unmarshal(byteValue, &keyring); err != nil {
 		log.Panicf("cannot unmarshal json: %v\n", err)
 	}
+	//LogDebug(keyring)
 	return keyring
 }
 
 func decodePublicKey(pubkey raven_key) *packet.PublicKey {
 
 	in := bytes.NewBuffer([]byte(pubkey.PublicKey))
+	LogDebug(in)
 	block, err := armor.Decode(in)
-	if err != nil {
-		log.Fatalf("Error decoding OpenPGP Armor: %s", err)
-	}
+	LogDebug(block)
+	//if err != nil {
+	//	log.Fatalf("Error decoding OpenPGP Armor: %s", err)
+	//}
 	if block.Type != openpgp.PublicKeyType {
+		LogDebug("Type mismatch")
 		log.Fatalf("invalid public key")
 	}
 
 	reader := packet.NewReader(block.Body)
 	pkt, err := reader.Next()
+	LogDebug(err)
 
 	key, ok := pkt.(*packet.PublicKey)
 	if !ok {
+		LogDebug(key)
+		LogDebug("Just not okay?")
 		log.Fatalf("invalid public key")
 	}
 	return key

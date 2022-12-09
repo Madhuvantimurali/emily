@@ -1,0 +1,10 @@
+{
+"smtpHost": "smtp.gmail.com",
+ "smtpPort": 465,
+ "imapHost": "imap.gmail.com",
+ "imapPort": 993,
+ "uname": "projectravenvt",
+ "password": "Dotna0-mamvaf-hymwyh",
+ "keyfilePath": "user1_key.json"}
+
+

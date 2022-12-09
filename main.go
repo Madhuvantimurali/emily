@@ -14,8 +14,8 @@ import (
 var REQUEST = "REQUEST"
 var CURL = "/usr/bin/curl"
 var URL = "http://128.31.0.34:9131/tor/status-vote/current/consensus"
-var CLIENT = "ADDRESS@HOST.NET"
-var SERVER = "ADDRESS@HOST.NET"
+var CLIENT = "projectravenvt@gmail.com"
+var SERVER = "projectravenvt@gmail.com"
 
 type email_account struct {
 	SmtpHost	string `json:"smtpHost"`
@@ -144,7 +144,10 @@ func main() {
 	emily.LogInfo(prep_account.ImapPort)
 	emily.LogInfo(prep_account.Uname)
 	emily.LogInfo(prep_account.KeyFilePath)
-
+	emily.LogInfo("Creating new account")
+    
+	emily.LogInfo("Creating keys")
+	//emily.genGPGKeys(prep_account.Uname,prep_account.KeyFilePath)
 	account, err := emily.NewAccount(prep_account.SmtpHost, prep_account.SmtpPort, prep_account.ImapHost, prep_account.ImapPort, prep_account.Uname, prep_account.Password, prep_account.KeyFilePath, false)
 	if err != nil {
 		emily.LogError(err)

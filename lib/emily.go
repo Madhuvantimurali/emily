@@ -96,7 +96,6 @@ func NewAccount(smtpHost string, smtpPort uint64, imapHost string, imapPort uint
 
 		keyring: loadKeyRing(keyfile),
 	}
-
 	go SlotGenerator(res.slot_chan)
 	return res, nil
 }
@@ -585,7 +584,10 @@ func encrypt(msg []byte, to string, keyring raven_keyring) ([]byte, error) {
 		return nil, fmt.Errorf("cannot find keypair for recipient '%v'", to)
 	}
 
+	
+
 	pubKey := decodePublicKey(keypair)
+	LogDebug(pubKey)
 	privKey := decodePrivateKey(keypair)
 	dst := createEntityFromKeys(pubKey, privKey)
 
